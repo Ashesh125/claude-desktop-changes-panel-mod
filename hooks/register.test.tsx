@@ -44,7 +44,12 @@ const answer = (stdout: string, exitCode = 0) => ({
   value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
 })
 
-test('lists changed files and shows a diff on click', async ($, on) => {
+test('lists changed files and opens one in the app diff pane', async ($, on) => {
+  const opened: unknown[] = []
+  on('mcp.call', (_, e) => {
+    opened.push(e)
+    return { value: { content: [], isError: false } }
+  })
   on('session.cwd', () => ({ value: '/home/me/my-app' }))
   on('session.repo', () => ({ value: null }))
   on('command.register', () => ({ value: { command: 'changes' } }))
@@ -52,6 +57,7 @@ test('lists changed files and shows a diff on click', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('process.run', (_, e) => {
     const args = e.argv.slice(3).join(' ')
+    if (args.startsWith('rev-parse --show-toplevel')) return answer('/repo\n')
     if (args.startsWith('rev-parse')) return answer('true\n')
     if (args.startsWith('status')) return answer(' M app/Foo.php\0?? new.txt\0')
     if (args.startsWith('branch')) return answer('main\n')
@@ -65,37 +71,44 @@ test('lists changed files and shows a diff on click', async ($, on) => {
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'refresh' })
-    expect((await ui.find({ type: 'Text', text: /2 uncommitted files/ }))?.text).toBe(
-      '2 uncommitted files',
-    )
+    expect((await ui.find({ type: 'Text', text: /^Working tree$/ }))?.text).toBe('Working tree')
     // The branch sits beside the view buttons.
     expect((await ui.find({ type: 'Text', text: /⎇/ }))?.text).toBe('⎇ main')
+    // A click opens the app's own diff pane at that file's uncommitted change.
     await ui.press({ key: 'file:app/Foo.php' })
-    const code = await ui.find({ type: 'Code' })
-    expect(code).toBeDefined()
-    expect(code?.props?.source).toBe('@@ -1,2 +1,2 @@\n <?php\n-old line\n+new line')
-    // Only the picked file is shown, with where it sits in the list.
-    expect((await ui.find({ type: 'Text', text: /of 2/ }))?.text).toBe('2 of 2')
-    expect(await ui.find({ key: 'file-prev' })).toBeDefined()
-    expect(await ui.find({ key: 'file-next' })).toBeUndefined()
-    expect(await ui.find({ key: 'file:new.txt' })).toBeUndefined()
-    await ui.press({ key: 'back-files' })
+    expect(opened.at(-1)).toEqual({
+      server: 'ccd_view',
+      tool: 'show_pane',
+      args: { pane: 'diff', path: '/repo/app/Foo.php', diff_scope: 'uncommitted' },
+    })
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
-    // Files sit under their folder, with their line counts.
-    expect((await ui.find({ type: 'Text', text: /^app\// }))?.text).toBe('app/')
+    // Files sit in a tree under their folder, with their line counts.
+    expect((await ui.find({ key: 'dir:app' }))?.text).toBe('app')
     expect((await ui.find({ type: 'Text', text: /^2 files$/ }))?.text).toBe('2 files')
     expect((await ui.find({ type: 'Text', text: /^\+2 −1$/ }))?.text).toBe('+2 −1')
+    // A folder folds and unfolds.
+    await ui.press({ key: 'dir:app' })
+    expect(await ui.find({ key: 'file:app/Foo.php' })).toBeUndefined()
+    await ui.press({ key: 'dir:app' })
+    expect(await ui.find({ key: 'file:app/Foo.php' })).toBeDefined()
     await ui.unmount()
   }
 })
 
 test('the graph opens a commit', async ($, on) => {
+  const opened: unknown[] = []
+  on('mcp.call', (_, e) => {
+    opened.push(e)
+    return { value: { content: [], isError: false } }
+  })
   on('command.register', () => ({ value: { command: 'changes' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('process.run', (_, e) => {
     const argv = e.argv
     const args = argv.slice(3).join(' ')
+    if (args.startsWith('rev-parse --show-toplevel')) return answer('/repo\n')
+    if (args.startsWith(`rev-parse ${'c'.repeat(40)}`)) return answer(`${'c'.repeat(40)}\n`)
     if (args.startsWith('rev-parse')) return answer('true\n')
     if (args.startsWith('log --all')) {
       const rec = (h: string, p: string, refs: string, subject: string) =>
@@ -107,7 +120,7 @@ test('the graph opens a commit', async ($, on) => {
       )
     }
     if (args.startsWith('show --name-status')) return answer('M\0app/Foo.php\0')
-    if (args.startsWith('log -1')) return answer('def5678 Add feature\n')
+    if (args.startsWith('log -1')) return answer('def5678\x1fAdd feature\x1fAsh\x1f1 day ago\n')
     if (args.startsWith('status')) return answer('')
     if (args.startsWith('branch')) return answer('main\n')
     return answer('', 1)
@@ -123,6 +136,12 @@ test('the graph opens a commit', async ($, on) => {
   await ui.press({ key: `commit:${'c'.repeat(40)}` })
   expect((await ui.find({ type: 'Text', text: /Add feature/ }))?.text).toBe('def5678 Add feature')
   expect(await ui.find({ key: 'file:app/Foo.php' })).toBeDefined()
+  await ui.press({ key: 'file:app/Foo.php' })
+  expect(opened.at(-1)).toEqual({
+    server: 'ccd_view',
+    tool: 'show_pane',
+    args: { pane: 'diff', path: '/repo/app/Foo.php', diff_scope: 'c'.repeat(40) },
+  })
 
   await ui.unmount()
 })

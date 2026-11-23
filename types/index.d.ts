@@ -7,8 +7,13 @@ export type ChangedFile = {
   isBinary: boolean
 }
 export type Mode = 'working' | 'commit' | 'graph'
-export type Listing = { files: ChangedFile[]; error: string | null; summary: string }
-export type Shown = { path: string; diff: string } | null
+export type CommitHead = { hash: string; subject: string; author: string; when: string }
+export type Listing = {
+  files: ChangedFile[]
+  error: string | null
+  summary: string
+  head: CommitHead | null
+}
 export type GraphRow = {
   hash: string
   short: string
@@ -33,13 +38,14 @@ declare module 'claude-code' {
     'changes-panel': {
       listing: Shaped<Listing>
       mode: Shaped<Mode>
-      shown: Shaped<Shown>
+      picked: Shaped<string | null>
       rev: Shaped<string>
       graph: Shaped<GraphRow[]>
       graphLimit: Shaped<number>
       footer: Shaped<Footer>
       context: Shaped<ContextInfo>
       contextOpen: Shaped<boolean>
+      collapsed: Shaped<string[]>
     }
   }
 }

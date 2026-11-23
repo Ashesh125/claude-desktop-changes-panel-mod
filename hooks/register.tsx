@@ -3,24 +3,34 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ChangedFile, ContextInfo, Listing, Mode } from '../types'
 import { layout, parseLog } from './graph'
+import {
+  STATUS_WORDS,
+  buildTree,
+  chipSvg,
+  churnSvg,
+  compositionSvg,
+  legend,
+  rowSvg,
+  rowText,
+  statusHex,
+} from './tree'
 
 const PANE = 'changes-panel'
 const TITLE = 'Changes'
-// The Code element draws at most 100000 characters; keep room for the rest.
-const MAX_DIFF = 60000
 const GRAPH_PAGE = 100
 const EDITING_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'Bash'])
 
 const listing = atom(
   { plugin: 'changes-panel', key: 'listing' } as const,
-  { files: [], error: null, summary: '' },
-  { shape: 'listing-2' },
+  { files: [], error: null, summary: '', head: null },
+  { shape: 'listing-3' },
 )
 const mode = atom({ plugin: 'changes-panel', key: 'mode' } as const, 'working', {
   shape: 'mode-2',
 })
-const shown = atom({ plugin: 'changes-panel', key: 'shown' } as const, null, {
-  shape: 'shown-1',
+// The file last opened in the app's diff pane, marked in the tree.
+const picked = atom({ plugin: 'changes-panel', key: 'picked' } as const, null, {
+  shape: 'picked-1',
 })
 // The commit the "commit" mode shows: HEAD, or one picked in the graph.
 const rev = atom({ plugin: 'changes-panel', key: 'rev' } as const, 'HEAD', {
@@ -42,6 +52,10 @@ const context = atom({ plugin: 'changes-panel', key: 'context' } as const, null,
 })
 const contextOpen = atom({ plugin: 'changes-panel', key: 'contextOpen' } as const, false, {
   shape: 'context-open-1',
+})
+// Folders the person folded in the tree, by path.
+const collapsed = atom({ plugin: 'changes-panel', key: 'collapsed' } as const, [], {
+  shape: 'collapsed-1',
 })
 
 const git = async ($: EngineInterface, args: string[]) =>
@@ -144,11 +158,11 @@ const loadListing = async (
 ): Promise<Listing> => {
   const inside = await git($, ['rev-parse', '--is-inside-work-tree'])
   if (inside.exitCode !== 0) {
-    return { files: [], error: 'This folder is not a git repository.', summary: '' }
+    return { files: [], error: 'This folder is not a git repository.', summary: '', head: null }
   }
   if (which === 'working') {
     const ran = await git($, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
-    if (ran.exitCode !== 0) return { files: [], error: ran.stderr.trim(), summary: '' }
+    if (ran.exitCode !== 0) return { files: [], error: ran.stderr.trim(), summary: '', head: null }
     const tracked = await git($, ['diff', 'HEAD', '--numstat', '-z', '-M'])
     const found = parseStatus(ran.stdout)
     const counts = parseNumstat(
@@ -162,17 +176,24 @@ const loadListing = async (
       files,
       error: null,
       summary: `${files.length} uncommitted file${files.length === 1 ? '' : 's'}`,
+      head: null,
     }
   }
-  if (which === 'graph') return { files: [], error: null, summary: '' }
+  if (which === 'graph') return { files: [], error: null, summary: '', head: null }
   const ran = await git($, ['show', '--name-status', '-z', '-M', '--format=', commit])
-  if (ran.exitCode !== 0) return { files: [], error: 'No such commit.', summary: '' }
+  if (ran.exitCode !== 0) return { files: [], error: 'No such commit.', summary: '', head: null }
   const [head, stat] = await Promise.all([
-    git($, ['log', '-1', '--format=%h %s (%an, %ar)', commit]),
+    git($, ['log', '-1', '--format=%h%x1f%s%x1f%an%x1f%ar', commit]),
     git($, ['show', '--numstat', '-z', '-M', '--format=', commit]),
   ])
   const files = withCounts(parseNameStatus(ran.stdout), parseNumstat(stat.stdout)).sort(byFolder)
-  return { files, error: null, summary: head.stdout.trim() }
+  const [hash = '', subject = '', author = '', when = ''] = head.stdout.trim().split('\x1f')
+  return {
+    files,
+    error: null,
+    summary: `${hash} ${subject} (${author}, ${when})`,
+    head: { hash, subject, author, when },
+  }
 }
 
 const loadGraph = async ($: EngineInterface, limit: number) => {
@@ -186,37 +207,6 @@ const loadGraph = async ($: EngineInterface, limit: number) => {
   return ran.exitCode === 0 ? layout(parseLog(ran.stdout)) : []
 }
 
-const hunksOnly = (diff: string): string => {
-  const start = diff.startsWith('@@') ? 0 : diff.indexOf('\n@@') + 1
-  if (start <= 0 && !diff.startsWith('@@')) return ''
-  let body = diff.slice(start)
-  if (body.length > MAX_DIFF) {
-    const cut = body.lastIndexOf('\n@@', MAX_DIFF)
-    body = body.slice(0, cut > 0 ? cut : MAX_DIFF)
-  }
-  return body.replace(/\n$/, '')
-}
-
-const loadDiff = async ($: EngineInterface, which: Mode, commit: string, file: ChangedFile) => {
-  let out = ''
-  if (which === 'commit') {
-    out = (await git($, ['show', '--format=', '-M', commit, '--', file.path])).stdout
-  } else if (file.isUntracked) {
-    out = (await git($, ['diff', '--no-index', '--', '/dev/null', file.path])).stdout
-  } else {
-    const ran = await git($, ['diff', 'HEAD', '--', file.path])
-    // A repository with no commit yet has no HEAD: show the staged diff.
-    out =
-      ran.exitCode === 0
-        ? ran.stdout
-        : (await git($, ['diff', '--cached', '--', file.path])).stdout
-  }
-  const hunks = hunksOnly(out)
-  if (hunks) return hunks
-  if (/Binary files/.test(out)) return 'Binary file changed.'
-  return file.status === 'D' ? 'File deleted.' : 'No textual changes.'
-}
-
 const refresh = async ($: EngineInterface) => {
   void loadFooter($)
   const which = await read($, mode)
@@ -228,15 +218,6 @@ const refresh = async ($: EngineInterface) => {
   }
   const next = await loadListing($, which, commit)
   await update($, listing, () => next)
-  const current = await read($, shown)
-  if (!current) return
-  const file = next.files.find(f => f.path === current.path)
-  if (!file) {
-    await update($, shown, () => null)
-    return
-  }
-  const diff = await loadDiff($, which, commit, file)
-  await update($, shown, () => ({ path: file.path, diff }))
 }
 
 // Never throws: the footer is a nicety, and must not break what called it.
@@ -277,39 +258,32 @@ const loadContext = async ($: EngineInterface) => {
 const compact = (n: number) =>
   n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
-const STATUS_NAMES: Record<string, string> = {
-  M: 'Modified',
-  A: 'Added',
-  D: 'Deleted',
-  R: 'Renamed',
-  C: 'Copied',
-  U: 'Untracked',
-  T: 'Type changed',
-}
-
-const folderOf = (path: string) => (path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '')
-const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1)
-
-// A file's share of the change, scaled to the biggest file in the list, so
-// the heavy files stand out: green for lines added, red for lines removed.
-const ADD = '#2ea043'
-const DEL = '#da3633'
-const TRACK = '#8b949e'
-const churnBar = (added: number, removed: number, biggest: number, width = 56) => {
-  const total = added + removed
-  const filled = total === 0 || biggest === 0 ? 0 : Math.max(3, Math.round((width * total) / biggest))
-  const green = total === 0 ? 0 : Math.round((filled * added) / total)
-  const clip = `<clipPath id="c"><rect x="0" y="1" width="${filled}" height="6" rx="3"/></clipPath>`
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="8" viewBox="0 0 ${width} 8">` +
-    `<rect x="0" y="1" width="${width}" height="6" rx="3" fill="${TRACK}" opacity="0.18"/>` +
-    (filled > 0
-      ? `<defs>${clip}</defs><g clip-path="url(#c)">` +
-        `<rect x="0" y="1" width="${green}" height="6" fill="${ADD}"/>` +
-        `<rect x="${green}" y="1" width="${filled - green}" height="6" fill="${DEL}"/></g>`
-      : '') +
-    `</svg>`
-  )
+// Opens the app's own diff pane at this file: the uncommitted change, or
+// the change the commit made. The pane is the desktop app's, reached through
+// its view tool; a surface without it says so in a toast.
+const openInApp = async ($: EngineInterface, which: Mode, commit: string, file: ChangedFile) => {
+  await update($, picked, () => file.path)
+  try {
+    const [top, sha] = await Promise.all([
+      git($, ['rev-parse', '--show-toplevel']),
+      which === 'commit' ? git($, ['rev-parse', commit]) : Promise.resolve(null),
+    ])
+    const root = top.stdout.trim()
+    const result = await $.mcp.call('ccd_view', 'show_pane', {
+      pane: 'diff',
+      path: root ? `${root}/${file.path}` : file.path,
+      diff_scope: sha ? sha.stdout.trim() : 'uncommitted',
+    })
+    if (result.isError) {
+      const words = result.content
+        .map(block => ('text' in block && typeof block.text === 'string' ? block.text : ''))
+        .join(' ')
+        .trim()
+      $.ui.toast(`Could not open the diff pane${words ? `: ${words}` : '.'}`)
+    }
+  } catch (err) {
+    $.ui.toast(`Could not open the diff pane: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 const statusColor = (status: string) =>
@@ -362,12 +336,12 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const { Box, Text, Button, Code } = ui
+    const { Box, Text, Button } = ui
     const Svg = 'Svg' in ui ? ui.Svg : null
     const list = await read($, listing)
     const which = await read($, mode)
     const commit = await read($, rev)
-    const open = await read($, shown)
+    const current = await read($, picked)
     const lines = await read($, graph)
     const env = await read($, footer)
 
@@ -378,16 +352,10 @@ export const register: Register = on => {
     const switchTo = (to: Mode, toRev = 'HEAD') => async () => {
       await update($, mode, () => to)
       await update($, rev, () => toRev)
-      await update($, shown, () => null)
+      await update($, picked, () => null)
       await refresh($)
     }
-    const pick = (file: ChangedFile) => async () => {
-      const diff = await loadDiff($, which, commit, file)
-      await update($, shown, () => ({ path: file.path, diff }))
-    }
-    const close = async () => {
-      await update($, shown, () => null)
-    }
+    const pick = (file: ChangedFile) => () => openInApp($, which, commit, file)
     const isLastCommit = which === 'commit' && commit === 'HEAD'
 
     const biggest = Math.max(0, ...list.files.map(f => f.added + f.removed))
@@ -399,123 +367,123 @@ export const register: Register = on => {
       </Text>
     )
 
-    const rows: ReturnType<typeof h>[] = []
-    let folder: string | null = null
-    for (const file of list.files) {
-      const dir = folderOf(file.path)
-      if (dir !== folder) {
-        folder = dir
-        rows.push(
-          <Box key={`dir:${dir}`}>
-            <Text dimColor mono size="caption" wrap="truncate-start">
-              {dir === '' ? './' : `${dir}/`}
+    const folded = await read($, collapsed)
+    const tree = buildTree(list.files, folded)
+    const toggle = (path: string) => () =>
+      update($, collapsed, paths => (paths.includes(path) ? paths.filter(p => p !== path) : [...paths, path]))
+
+    const treeRows = tree.map(row => (
+      <Box key={`tree:${row.kind}:${row.path}`} flexDirection="row" alignItems="center" gap={1}>
+        <Box flexShrink={0}>
+          {Svg ? (
+            <Svg source={rowSvg(row)} alt={row.kind === 'dir' ? 'folder' : 'file'} />
+          ) : (
+            <Text dimColor mono>
+              {rowText(row)}
             </Text>
-          </Box>,
-        )
-      }
-      rows.push(
-        <Box key={`row:${file.path}`} flexDirection="row" alignItems="center" gap={1} paddingLeft={2}>
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Button key={`file:${file.path}`} plain onPress={pick(file)}>
-              <Text wrap="truncate-end">
-                <Text mono bold color={statusColor(file.status)}>
-                  {file.status}
-                </Text>
-                {'  '}
-                {nameOf(file.path)}
+          )}
+        </Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          {row.kind === 'dir' ? (
+            <Button key={`dir:${row.path}`} plain onPress={toggle(row.path)}>
+              <Text bold wrap="truncate-end">
+                {row.name}
               </Text>
             </Button>
-          </Box>
-          {file.isBinary ? <Text dimColor>binary</Text> : counts(file.added, file.removed)}
-          {Svg && (
-            <Box flexShrink={0}>
-              <Svg source={churnBar(file.added, file.removed, biggest)} alt={`${file.added} added, ${file.removed} removed`} />
-            </Box>
+          ) : (
+            <Button key={`file:${row.path}`} plain onPress={pick(row.file as ChangedFile)}>
+              <Text wrap="truncate-end" bold={current === row.path} underline={current === row.path}>
+                {row.name}
+              </Text>
+            </Button>
           )}
-        </Box>,
-      )
-    }
+        </Box>
+        {row.kind === 'dir' ? (
+          <Text dimColor tabular>
+            {row.fileCount} · +{row.added} −{row.removed}
+          </Text>
+        ) : row.file?.isBinary ? (
+          <Text dimColor>binary</Text>
+        ) : (
+          counts(row.added, row.removed)
+        )}
+        {row.kind === 'file' && Svg && (
+          <Box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
+            <Svg source={churnSvg(row.added, row.removed, biggest)} alt={`${row.added} added, ${row.removed} removed`} />
+            <Svg source={chipSvg(row.file?.status ?? 'M')} alt={STATUS_WORDS[row.file?.status ?? 'M'] ?? 'changed'} />
+          </Box>
+        )}
+        {row.kind === 'file' && !Svg && (
+          <Text mono bold color={statusColor(row.file?.status ?? 'M')}>
+            {row.file?.status}
+          </Text>
+        )}
+      </Box>
+    ))
+
+    const parts = legend(list.files)
+    const summaryCard = list.files.length > 0 && (
+      <Box flexDirection="column" gap={1} borderStyle="round" borderDimColor paddingX={2} paddingY={1}>
+        {list.head ? (
+          <Box flexDirection="column">
+            <Text>
+              <Text mono color="warning">
+                {list.head.hash}
+              </Text>{' '}
+              <Text bold>{list.head.subject}</Text>
+            </Text>
+            <Text dimColor>
+              {list.head.author} · {list.head.when}
+            </Text>
+          </Box>
+        ) : (
+          <Box flexDirection="column">
+            <Text bold>Working tree</Text>
+            <Text dimColor>Changes not yet committed, against HEAD</Text>
+          </Box>
+        )}
+        <Box flexDirection="row" alignItems="center" gap={2}>
+          <Text bold>
+            {list.files.length} file{list.files.length === 1 ? '' : 's'}
+          </Text>
+          {counts(totalAdded, totalRemoved)}
+        </Box>
+        {Svg && <Svg source={compositionSvg(list.files, 260)} alt="Files by kind of change" />}
+        <Box flexDirection="row" gap={2} flexWrap="wrap">
+          {parts.map(part => (
+            <Text>
+              <Text color={statusHex(part.status)}>●</Text>{' '}
+              <Text dimColor>
+                {part.count} {STATUS_WORDS[part.status]}
+              </Text>
+            </Text>
+          ))}
+        </Box>
+      </Box>
+    )
 
     const fileList = (
       <Box flexDirection="column" gap={1}>
-        {list.summary !== '' && <Text dimColor>{list.summary}</Text>}
         {list.error !== null && <Text color="error">{list.error}</Text>}
         {list.error === null && list.files.length === 0 && (
-          <Text dimColor>
-            {which === 'working' ? 'Nothing to commit: the working tree matches HEAD.' : 'This commit changes no files.'}
-          </Text>
-        )}
-        {list.files.length > 0 && (
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            <Text bold>
-              {list.files.length} file{list.files.length === 1 ? '' : 's'}
+          <Box borderStyle="round" borderDimColor paddingX={2} paddingY={1}>
+            <Text dimColor>
+              {which === 'working'
+                ? 'Nothing to commit: the working tree matches HEAD.'
+                : 'This commit changes no files.'}
             </Text>
-            {counts(totalAdded, totalRemoved)}
           </Box>
         )}
-        <Box flexDirection="column">{rows}</Box>
+        {summaryCard}
+        {list.files.length > 0 && (
+          <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1} paddingY={1}>
+            {treeRows}
+          </Box>
+        )}
       </Box>
     )
 
-    const at = open === null ? -1 : list.files.findIndex(f => f.path === open.path)
-    const openFile = at === -1 ? null : list.files[at] ?? null
-    const prevFile = at > 0 ? list.files[at - 1] : undefined
-    const nextFile = at >= 0 ? list.files[at + 1] : undefined
-    const fileView = open !== null && (
-      <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
-          <Button key="back-files" plain onPress={close}>
-            ← All files
-          </Button>
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            {at >= 0 && (
-              <Text dimColor tabular>
-                {at + 1} of {list.files.length}
-              </Text>
-            )}
-            {prevFile && (
-              <Button key="file-prev" plain onPress={pick(prevFile)}>
-                ‹ Prev
-              </Button>
-            )}
-            {nextFile && (
-              <Button key="file-next" plain onPress={pick(nextFile)}>
-                Next ›
-              </Button>
-            )}
-          </Box>
-        </Box>
-        <Box flexDirection="column">
-          {folderOf(open.path) !== '' && (
-            <Text dimColor mono wrap="truncate-start">
-              {folderOf(open.path)}/
-            </Text>
-          )}
-          <Text bold wrap="truncate-end">
-            {nameOf(open.path)}
-          </Text>
-          {openFile && (
-            <Text>
-              <Text color={statusColor(openFile.status)}>
-                {STATUS_NAMES[openFile.status] ?? openFile.status}
-              </Text>
-              {' · '}
-              {openFile.isBinary ? <Text dimColor>binary</Text> : counts(openFile.added, openFile.removed)}
-              <Text dimColor>
-                {' · '}
-                {which === 'commit' ? `in ${commit === 'HEAD' ? 'the last commit' : commit.slice(0, 7)}` : 'against HEAD'}
-              </Text>
-            </Text>
-          )}
-        </Box>
-        {open.diff.startsWith('@@') ? (
-          <Code source={open.diff} format="diff" path={open.path} />
-        ) : (
-          <Text dimColor>{open.diff}</Text>
-        )}
-      </Box>
-    )
-    const files = fileView || fileList
+    const files = fileList
 
     const limit = await read($, graphLimit)
     const refColor = (ref: string) =>

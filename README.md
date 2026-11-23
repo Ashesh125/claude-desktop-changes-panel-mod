@@ -2,8 +2,7 @@
 
 A Claude Code mod that adds a **Changes** pane beside the chat: a commit-style view of your project's git changes, and a GitLab-style commit graph.
 
-- **Uncommitted** lists every changed, staged and untracked file, grouped by folder, with its status (M, A, D, R, U), its `+added −removed` lines and a bar sized against the biggest change. Click a file to open just that file's diff, then step through the rest with **‹ Prev** / **Next ›**.
-- **Last commit** shows the files changed in `HEAD` and their diffs.
+- **Uncommitted** and **Last commit** open with a summary card (the commit's hash, message, author and age, or the working tree), the file and line totals, and a bar splitting the change into added, modified, renamed, deleted and untracked files. Below it, the files sit in a folder tree with drawn guide lines, folder and file icons coloured by language, `+added −removed` per file and per folder, a change-size bar and a status chip. Click a folder to fold it; click a file to open it in the desktop app's own diff pane, at that file's uncommitted change or at the change its commit made.
 - **Graph** draws the history of all branches as coloured lanes, with merge commits, branch and tag labels, author and age. Click a commit to see its files and diffs; **Load more commits** pages further back.
 
 - **Project line** sits in a band just above the prompt, always in view: the project name and **Context ▸**, which expands how much of the context window the conversation uses, by category.
