@@ -14,6 +14,20 @@ const PANE = {
   },
 } as const
 
+const BAND = {
+  plugin: 'changes-panel',
+  component: 'AbovePrompt',
+  props: {
+    hasSurvey: false,
+    isCollapsed: false,
+    isWorking: false,
+    maxRows: 20,
+    bodyColumns: 80,
+    scroll: { offset: 0, bodyRows: 20 },
+    view: {},
+  },
+} as const
+
 const DIFF = [
   'diff --git a/app/Foo.php b/app/Foo.php',
   'index 111..222 100644',
@@ -39,6 +53,7 @@ test('lists changed files and shows a diff on click', async ($, on) => {
     if (args.startsWith('rev-parse')) return answer('true\n')
     if (args.startsWith('status')) return answer(' M app/Foo.php\0?? new.txt\0')
     if (args.startsWith('branch')) return answer('main\n')
+    if (args.startsWith('diff HEAD --numstat')) return answer('2\t1\tapp/Foo.php\0')
     if (args.startsWith('diff HEAD')) return answer(DIFF)
     return answer('', 1)
   })
@@ -55,24 +70,27 @@ test('lists changed files and shows a diff on click', async ($, on) => {
     const code = await ui.find({ type: 'Code' })
     expect(code).toBeDefined()
     expect(code?.props?.source).toBe('@@ -1,2 +1,2 @@\n <?php\n-old line\n+new line')
-    // A second click closes the diff again.
-    await ui.press({ key: 'file:app/Foo.php' })
+    // Only the picked file is shown, with where it sits in the list.
+    expect((await ui.find({ type: 'Text', text: /of 2/ }))?.text).toBe('2 of 2')
+    expect(await ui.find({ key: 'file-prev' })).toBeDefined()
+    expect(await ui.find({ key: 'file-next' })).toBeUndefined()
+    expect(await ui.find({ key: 'file:new.txt' })).toBeUndefined()
+    await ui.press({ key: 'back-files' })
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
+    // Files sit under their folder, with their line counts.
+    expect((await ui.find({ type: 'Text', text: /^app\// }))?.text).toBe('app/')
+    expect((await ui.find({ type: 'Text', text: /^2 files$/ }))?.text).toBe('2 files')
+    expect((await ui.find({ type: 'Text', text: /^\+2 −1$/ }))?.text).toBe('+2 −1')
     await ui.unmount()
   }
 })
 
-test('the graph opens a commit, and the terminal runs a command', async ($, on) => {
-  const seen: string[] = []
+test('the graph opens a commit', async ($, on) => {
   on('command.register', () => ({ value: { command: 'changes' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('process.run', (_, e) => {
     const argv = e.argv
-    if (argv[0] === 'zsh') {
-      seen.push(argv[2] ?? '')
-      return answer('hello\n')
-    }
     const args = argv.slice(3).join(' ')
     if (args.startsWith('rev-parse')) return answer('true\n')
     if (args.startsWith('log --all')) {
@@ -102,8 +120,48 @@ test('the graph opens a commit, and the terminal runs a command', async ($, on) 
   expect((await ui.find({ type: 'Text', text: /Add feature/ }))?.text).toBe('def5678 Add feature')
   expect(await ui.find({ key: 'file:app/Foo.php' })).toBeDefined()
 
-  await ui.input({ key: 'terminal', text: 'echo hello' })
-  expect(seen).toEqual(['{ echo hello\n} 2>&1'])
-  expect((await ui.find({ type: 'Text', text: /\$ echo hello/ }))?.text).toBe('$ echo hello')
+  await ui.unmount()
+})
+
+test('the band shows the project, and Context expands', async ($, on) => {
+  on('command.register', () => ({ value: { command: 'changes' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: '/home/me/my-app' }))
+  on('session.repo', () => ({ value: null }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      rateLimits: [],
+      context: {
+        tokens: 42000,
+        window: 200000,
+        percent: 21,
+        breakdown: {
+          categories: [
+            { name: 'Messages', tokens: 30000, color: '#5a8dee', isDeferred: false, kind: 'used' },
+            { name: 'System prompt', tokens: 12000, color: '#888888', isDeferred: false, kind: 'used' },
+          ],
+          // Only what the pane reads; the engine's breakdown holds more.
+        } as never,
+      },
+    },
+  }))
+  on('process.run', (_, e) =>
+    e.argv.includes('--show-current') ? answer('main\n') : answer('', 1),
+  )
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  // The project line lives in the band above the prompt, not in the pane.
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  expect(await ui.find({ type: 'Text', text: /Messages/ })).toBeUndefined()
+  await ui.press({ key: 'context-toggle' })
+  expect((await ui.find({ type: 'Text', text: /my-app/ }))?.text).toBe(
+    'my-app · ⎇ main · claude-opus-5-5',
+  )
+  expect((await ui.find({ key: 'context-toggle' }))?.text).toBe('Context 21% ▾')
+  expect((await ui.find({ type: 'Text', text: /Messages/ }))?.text).toBe('■ Messages')
   await ui.unmount()
 })
