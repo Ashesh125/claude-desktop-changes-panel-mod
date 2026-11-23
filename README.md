@@ -14,7 +14,7 @@ The list refreshes by itself after Claude edits a file or runs a command, and af
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install changes-panel --marketplace OWNER/changes-panel
+/plugin install changes-panel --marketplace Ashesh125/claude-desktop-changes-panel-mod
 ```
 
 Answer `y` to add the marketplace, then pick a scope.
@@ -22,7 +22,7 @@ Answer `y` to add the marketplace, then pick a scope.
 From a shell:
 
 ```bash
-claude plugin install changes-panel --marketplace OWNER/changes-panel
+claude plugin install changes-panel --marketplace Ashesh125/claude-desktop-changes-panel-mod
 ```
 
 ## Requirements
