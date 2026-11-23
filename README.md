@@ -6,7 +6,7 @@ A Claude Code mod that adds a **Changes** pane beside the chat: a commit-style v
 - **Graph** draws the history of all branches as coloured lanes, with merge commits, branch and tag labels, author and age. Click a commit to see its files and diffs; **Load more commits** pages further back.
 
 - **Projects** (`/projects`, or the **Projects** button above the prompt) shows your OpenProject work. The first page has a card for each project you are a member of: its open work and yours, how it splits across the board's columns, your time this week, and the local folder it links to (matched by name, changeable), with **Open board** and **Open in Claude Code**. A project's board has four columns, To do, Doing, Review and Done (closed in the last two weeks), and an **All / Mine** filter. Each card moves one column with **◀ ▶** (setting the column's status in OpenProject; **⋯** picks any status), runs a timer, and books time in OpenProject with **Log time**, which offers the timer's time or an estimate from your commits today. You and Claude can add tasks of your own to a board; they stay in the pane.
-- **Project line** sits in a band just above the prompt, always in view: the project name and **Context ▸**, which expands how much of the context window the conversation uses, by category.
+- **Project line** sits in a band just above the prompt, always in view: the project name, **Context ▸**, which expands how much of the context window the conversation uses, by category, the **Projects** button, and the running timer with its task, when one is running.
 
 The current branch shows at the right of the view buttons. The list refreshes by itself after Claude edits a file or runs a command. Type `/changes` to reopen the pane.
 
