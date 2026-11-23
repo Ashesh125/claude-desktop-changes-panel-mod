@@ -62,9 +62,25 @@ const minute = atom({ plugin: 'changes-panel', key: 'minute' } as const, 0, { sh
 const collapsed = atom({ plugin: 'changes-panel', key: 'collapsed' } as const, [], {
   shape: 'collapsed-1',
 })
+// The folder the pane last showed: when the session's root moves, the pane
+// starts over in the new one.
+const folder = atom({ plugin: 'changes-panel', key: 'folder' } as const, '', { shape: 'folder-1' })
+const FOLDER_CHECK = 3000
+// Set by the Projects pane (hooks/worklog.tsx) when a board opens.
+const viewing = atom({ plugin: 'changes-panel', key: 'viewing' } as const, null, { shape: 'viewing-1' })
 
+// Git runs in the session's project root, which moves when the folder is
+// changed in the app (or with /cd), not where the session started.
 const git = async ($: EngineInterface, args: string[]) =>
-  $.process.run(['git', '-c', 'core.quotepath=off', ...args], { timeoutMs: 20000 })
+  $.process.run(['git', '-c', 'core.quotepath=off', ...args], {
+    cwd: (await shownFolder($)) || undefined,
+    timeoutMs: 20000,
+  })
+
+// The folder the pane shows: the linked folder of the project board opened
+// last in the Projects pane, else the session's project root.
+const shownFolder = async ($: EngineInterface) =>
+  (await read($, viewing)) ?? (await $.session.root().catch(() => ''))
 
 // `git status --porcelain=v1 -z`: "XY path\0", renames add "\0orig".
 const parseStatus = (out: string): ChangedFile[] => {
@@ -212,6 +228,23 @@ const loadGraph = async ($: EngineInterface, limit: number) => {
   return ran.exitCode === 0 ? layout(parseLog(ran.stdout)) : []
 }
 
+// Starts the pane over when the session has moved to another folder.
+// Returns whether it did.
+const followFolder = async ($: EngineInterface) => {
+  const root = await shownFolder($)
+  if (!root || root === (await read($, folder))) return false
+  const isFirst = (await read($, folder)) === ''
+  await update($, folder, () => root)
+  if (isFirst) return false
+  await update($, rev, () => 'HEAD')
+  await update($, picked, () => null)
+  await update($, collapsed, () => [])
+  await update($, graphLimit, () => GRAPH_PAGE)
+  await update($, mode, which => (which === 'commit' ? 'working' : which))
+  await refresh($)
+  return true
+}
+
 const refresh = async ($: EngineInterface) => {
   void loadFooter($)
   const which = await read($, mode)
@@ -235,12 +268,11 @@ const loadFooter = async ($: EngineInterface) => {
 }
 
 const loadFooterOrThrow = async ($: EngineInterface) => {
-  const [cwd, repo, branch] = await Promise.all([
-    $.session.cwd(),
-    $.session.repo().catch(() => null),
+  const [root, branch] = await Promise.all([
+    shownFolder($).then(f => f || $.session.cwd()),
     git($, ['branch', '--show-current']).catch(() => null),
   ])
-  const project = repo?.name ?? cwd.split('/').filter(Boolean).pop() ?? cwd
+  const project = root.split('/').filter(Boolean).pop() ?? root
   const next = { project, branch: branch?.stdout.trim() ?? '' }
   await update($, footer, () => next)
 }
@@ -310,7 +342,9 @@ export const register: Register = on => {
       description: 'Open the Changes pane: changed files, diffs and the git graph',
     })
     void $.ui.open({ id: PANE, title: TITLE })
+    await followFolder($).catch(() => false)
     void refresh($)
+    $.clock.every(FOLDER_CHECK, () => followFolder($).catch(() => false))
     void loadFooter($)
     await startWorklog($).catch(() => undefined)
     void loadContext($).catch(() => undefined)
@@ -322,14 +356,14 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     void loadContext($).catch(() => undefined)
-    void loadFooter($)
+    if (!(await followFolder($).catch(() => false))) void loadFooter($)
 
     return done
   })
 
   on('command.run', { command: 'changes' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
-    await refresh($)
+    if (!(await followFolder($).catch(() => false))) await refresh($)
 
     return { text: 'Changes pane opened.' }
   })
@@ -365,6 +399,14 @@ export const register: Register = on => {
     }
     const pick = (file: ChangedFile) => () => openInApp($, which, commit, file)
     const isLastCommit = which === 'commit' && commit === 'HEAD'
+    // Showing a project's folder rather than the session's: a way back.
+    const sessionRoot = await $.session.root().catch(() => '')
+    const shown = await read($, viewing)
+    const away = shown !== null && shown !== sessionRoot ? sessionRoot.split('/').filter(Boolean).pop() ?? '' : ''
+    const backToSession = async () => {
+      await update($, viewing, () => null)
+      await followFolder($)
+    }
 
     const biggest = Math.max(0, ...list.files.map(f => f.added + f.removed))
     const totalAdded = list.files.reduce((sum, f) => sum + f.added, 0)
@@ -578,11 +620,18 @@ export const register: Register = on => {
               Refresh
             </Button>
           </Box>
-          {env.branch !== '' && (
-            <Text dimColor mono wrap="truncate-start">
-              ⎇ {env.branch}
-            </Text>
-          )}
+          <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} minWidth={0}>
+            {away && (
+              <Button key="folder-session" plain dimColor onPress={backToSession}>
+                ← {away}
+              </Button>
+            )}
+            {env.branch !== '' && (
+              <Text dimColor mono wrap="truncate-start">
+                {env.project} ⎇ {env.branch}
+              </Text>
+            )}
+          </Box>
         </Box>
         {which === 'graph' ? graphView : files}
       </Box>

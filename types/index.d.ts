@@ -104,6 +104,8 @@ declare module 'claude-code' {
       context: Shaped<ContextInfo>
       contextOpen: Shaped<boolean>
       collapsed: Shaped<string[]>
+      folder: Shaped<string>
+      viewing: Shaped<string | null>
       worklog: Shaped<Worklog>
       opData: Shaped<OpData>
       page: Shaped<Page>

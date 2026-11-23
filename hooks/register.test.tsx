@@ -73,7 +73,7 @@ test('lists changed files and opens one in the app diff pane', async ($, on) => 
     await ui.press({ key: 'refresh' })
     expect((await ui.find({ type: 'Text', text: /^Working tree$/ }))?.text).toBe('Working tree')
     // The branch sits beside the view buttons.
-    expect((await ui.find({ type: 'Text', text: /⎇/ }))?.text).toBe('⎇ main')
+    expect((await ui.find({ type: 'Text', text: /⎇/ }))?.text).toBe('my-app ⎇ main')
     // A click opens the app's own diff pane at that file's uncommitted change.
     await ui.press({ key: 'file:app/Foo.php' })
     expect(opened.at(-1)).toEqual({
@@ -151,6 +151,7 @@ test('the band shows the project, and Context expands', async ($, on) => {
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/home/me/my-app' }))
+  on('session.root', () => ({ value: '/home/me/my-app' }))
   on('session.repo', () => ({ value: null }))
   on('session.usage', () => ({
     value: {
@@ -184,5 +185,38 @@ test('the band shows the project, and Context expands', async ($, on) => {
   expect((await ui.find({ type: 'Text', text: /my-app/ }))?.text).toBe('my-app')
   expect((await ui.find({ key: 'context-toggle' }))?.text).toBe('Context 21% ▾')
   expect((await ui.find({ type: 'Text', text: /Messages/ }))?.text).toBe('■ Messages')
+  await ui.unmount()
+})
+
+test('when the session moves to another folder, the pane follows', async ($, on) => {
+  let root = '/home/me/first-app'
+  const ranIn: (string | undefined)[] = []
+  on('command.register', () => ({ value: { command: 'changes' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.every', () => ({ value: undefined }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.cwd', () => ({ value: root }))
+  on('session.root', () => ({ value: root }))
+  on('session.repo', () => ({ value: null }))
+  on('process.run', (_, e) => {
+    const args = e.argv.slice(3).join(' ')
+    if (e.argv[0] === 'git') ranIn.push(e.init?.cwd)
+    if (args.startsWith('rev-parse')) return answer('true\n')
+    if (args.startsWith('branch')) return answer(root.endsWith('first-app') ? 'main\n' : 'develop\n')
+    if (args.startsWith('status')) return answer(root.endsWith('first-app') ? ' M first.txt\0' : ' M second.txt\0')
+    return answer('', 1)
+  })
+
+  await $.session.start({ cwd: root, surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ key: 'file:first.txt' })).toBeDefined()
+
+  root = '/home/me/second-app'
+  await $.command.run({ command: 'changes', args: '' } as never)
+  expect(await ui.find({ key: 'file:first.txt' })).toBeUndefined()
+  expect(await ui.find({ key: 'file:second.txt' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /⎇/ }))?.text).toBe('second-app ⎇ develop')
+  expect(ranIn.at(-1)).toBe('/home/me/second-app')
   await ui.unmount()
 })

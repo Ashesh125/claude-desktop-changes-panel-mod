@@ -76,8 +76,10 @@ test('projects, the board, moving a card and booking time', async ($, on) => {
   on('session.cwd', () => ({ value: '/home/me/laravel/infrastructure-monitoring' }))
   on('session.repo', () => ({ value: null }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  const gitIn: (string | undefined)[] = []
   on('process.run', (_, e) => {
     const argv = e.argv.join(' ')
+    if (e.argv[0] === 'git') gitIn.push(e.init?.cwd)
     if (argv.includes('openproject.json')) return ok(JSON.stringify({ url: 'https://pm.example.test', apiKey: 'opapi-test' }))
     if (argv.includes('rev-parse --show-toplevel')) return ok('/home/me/laravel/infrastructure-monitoring\n')
     if (argv.startsWith('find')) {
@@ -149,6 +151,9 @@ test('projects, the board, moving a card and booking time', async ($, on) => {
 
   // The board: one card per work package, in its column.
   await ui.press({ key: 'open-board:45' })
+  // The Changes pane moves to the board's linked folder.
+  await $.command.run({ command: 'changes', args: '' } as never)
+  expect(gitIn.at(-1)).toBe('/home/me/laravel/iatipublisher')
   expect((await ui.find({ key: 'right:wp:411' }))?.text).toBe('Doing ▶')
   expect((await ui.find({ key: 'left:wp:500' }))?.text).toBe('◀ To do')
   expect((await ui.find({ key: 'left:wp:399' }))?.text).toBe('◀ Review')

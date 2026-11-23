@@ -35,6 +35,9 @@ const opStatus = atom(
 )
 // The running timer, for the band above the prompt.
 const running = atom({ plugin: 'changes-panel', key: 'running' } as const, null, { shape: 'running-1' })
+// The folder the Changes pane shows instead of the session's (hooks/register.tsx
+// reads it): the linked folder of the board you opened last.
+const viewing = atom({ plugin: 'changes-panel', key: 'viewing' } as const, null, { shape: 'viewing-1' })
 
 // ---- Lanes -------------------------------------------------------------------
 
@@ -696,6 +699,10 @@ export const registerWorklog = (on: On) => {
 
     const project = at.name === 'board' ? data.projects.find(p => p.id === at.projectId) : undefined
     const go = (next: Page) => async () => {
+      if (next.name === 'board') {
+        const linked = (await read($, worklog)).links[next.projectId]
+        if (linked) await update($, viewing, () => linked)
+      }
       await update($, page, () => next)
       await update($, logForm, () => null)
       await update($, expanded, () => null)
@@ -799,7 +806,12 @@ export const registerWorklog = (on: On) => {
               label="Folder"
               value={folder ?? ''}
               options={[{ value: '', label: 'Not linked' }, ...folders.map(f => ({ value: f, label: baseName(f) }))]}
-              onSelect={value => save($, l => ({ ...l, links: { ...l.links, [p.id]: value === '' ? null : value } }))}
+              onSelect={async value => {
+                const was = (await read($, worklog)).links[p.id] ?? null
+                await save($, l => ({ ...l, links: { ...l.links, [p.id]: value === '' ? null : value } }))
+                // The Changes pane showing this project's folder moves with it.
+                if (was !== null && (await read($, viewing)) === was) await update($, viewing, () => (value === '' ? null : value))
+              }}
             />
             <Box flexDirection="row" gap={1} flexWrap="wrap">
               <Button key={`open-board:${p.id}`} variant="primary" onPress={go({ name: 'board', projectId: p.id })}>
