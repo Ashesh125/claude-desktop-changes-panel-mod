@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { ChangedFile, ContextInfo, Listing, Mode } from '../types'
 import { layout, parseLog } from './graph'
+import { MINUTE, PROJECTS_PANE, PROJECTS_TITLE, formatMinutes, registerWorklog, startWorklog } from './worklog'
 import {
   STATUS_WORDS,
   buildTree,
@@ -53,6 +54,10 @@ const context = atom({ plugin: 'changes-panel', key: 'context' } as const, null,
 const contextOpen = atom({ plugin: 'changes-panel', key: 'contextOpen' } as const, false, {
   shape: 'context-open-1',
 })
+// The Projects pane's running timer (hooks/worklog.tsx writes it), read here
+// for the band: same plugin and key, so the same values.
+const running = atom({ plugin: 'changes-panel', key: 'running' } as const, null, { shape: 'running-1' })
+const minute = atom({ plugin: 'changes-panel', key: 'minute' } as const, 0, { shape: 'minute-1' })
 // Folders the person folded in the tree, by path.
 const collapsed = atom({ plugin: 'changes-panel', key: 'collapsed' } as const, [], {
   shape: 'collapsed-1',
@@ -296,6 +301,8 @@ const statusColor = (status: string) =>
         : 'warning'
 
 export const register: Register = on => {
+  registerWorklog(on)
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({
@@ -305,6 +312,7 @@ export const register: Register = on => {
     void $.ui.open({ id: PANE, title: TITLE })
     void refresh($)
     void loadFooter($)
+    await startWorklog($).catch(() => undefined)
     void loadContext($).catch(() => undefined)
 
     return started
@@ -589,6 +597,9 @@ export const register: Register = on => {
     const env = await read($, footer)
     const ctx = await read($, context)
     const isContextOpen = await read($, contextOpen)
+    const timer = await read($, running)
+    await read($, minute)
+    const runningFor = timer ? formatMinutes(((await $.clock.now()) - timer.startedAt) / MINUTE) : ''
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -616,6 +627,19 @@ export const register: Register = on => {
           </Box>
         )}
         <Box flexDirection="row" justifyContent="flex-end" gap={1} flexWrap="wrap">
+          {timer && (
+            <Text wrap="truncate-end">
+              <Text color="success">●</Text> {timer.label} · <Text tabular>{runningFor}</Text>
+            </Text>
+          )}
+          <Button
+            key="projects-open"
+            plain
+            dimColor
+            onPress={() => $.ui.open({ id: PROJECTS_PANE, title: PROJECTS_TITLE })}
+          >
+            Projects
+          </Button>
           <Text dimColor wrap="truncate-end">
             {env.project}
           </Text>
