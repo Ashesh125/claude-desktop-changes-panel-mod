@@ -1,0 +1,5 @@
+{
+  "name": "changes-panel",
+  "owner": { "name": "Ashesh Shakya" },
+  "plugins": [{ "name": "changes-panel", "source": "./" }]
+}
