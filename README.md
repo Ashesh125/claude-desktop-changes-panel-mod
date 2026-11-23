@@ -6,9 +6,9 @@ A Claude Code mod that adds a **Changes** pane beside the chat: a commit-style v
 - **Last commit** shows the files changed in `HEAD` and their diffs.
 - **Graph** draws the history of all branches as coloured lanes, with merge commits, branch and tag labels, author and age. Click a commit to see its files and diffs; **Load more commits** pages further back.
 
-- **Project line** sits in a band just above the prompt, always in view: the project, branch and model, and **Context ▸**, which expands how much of the context window the conversation uses, by category.
+- **Project line** sits in a band just above the prompt, always in view: the project name and **Context ▸**, which expands how much of the context window the conversation uses, by category.
 
-The list refreshes by itself after Claude edits a file or runs a command. Type `/changes` to reopen the pane.
+The current branch shows at the right of the view buttons. The list refreshes by itself after Claude edits a file or runs a command. Type `/changes` to reopen the pane.
 
 ## Install
 

@@ -45,6 +45,8 @@ const answer = (stdout: string, exitCode = 0) => ({
 })
 
 test('lists changed files and shows a diff on click', async ($, on) => {
+  on('session.cwd', () => ({ value: '/home/me/my-app' }))
+  on('session.repo', () => ({ value: null }))
   on('command.register', () => ({ value: { command: 'changes' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -64,8 +66,10 @@ test('lists changed files and shows a diff on click', async ($, on) => {
     const ui = await $.ui.mount({ ...PANE, surface })
     await ui.press({ key: 'refresh' })
     expect((await ui.find({ type: 'Text', text: /2 uncommitted files/ }))?.text).toBe(
-      'main · 2 uncommitted files',
+      '2 uncommitted files',
     )
+    // The branch sits beside the view buttons.
+    expect((await ui.find({ type: 'Text', text: /⎇/ }))?.text).toBe('⎇ main')
     await ui.press({ key: 'file:app/Foo.php' })
     const code = await ui.find({ type: 'Code' })
     expect(code).toBeDefined()
@@ -129,7 +133,6 @@ test('the band shows the project, and Context expands', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/home/me/my-app' }))
   on('session.repo', () => ({ value: null }))
-  on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({
     value: {
       startedAt: 0,
@@ -158,9 +161,8 @@ test('the band shows the project, and Context expands', async ($, on) => {
 
   expect(await ui.find({ type: 'Text', text: /Messages/ })).toBeUndefined()
   await ui.press({ key: 'context-toggle' })
-  expect((await ui.find({ type: 'Text', text: /my-app/ }))?.text).toBe(
-    'my-app · ⎇ main · claude-opus-5-5',
-  )
+  // Just the project: the branch is in the pane, the model is not shown.
+  expect((await ui.find({ type: 'Text', text: /my-app/ }))?.text).toBe('my-app')
   expect((await ui.find({ key: 'context-toggle' }))?.text).toBe('Context 21% ▾')
   expect((await ui.find({ type: 'Text', text: /Messages/ }))?.text).toBe('■ Messages')
   await ui.unmount()

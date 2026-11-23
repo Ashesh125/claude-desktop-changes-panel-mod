@@ -34,8 +34,8 @@ const graphLimit = atom({ plugin: 'changes-panel', key: 'graphLimit' } as const,
 })
 const footer = atom(
   { plugin: 'changes-panel', key: 'footer' } as const,
-  { project: '', branch: '', model: '' },
-  { shape: 'footer-1' },
+  { project: '', branch: '' },
+  { shape: 'footer-2' },
 )
 const context = atom({ plugin: 'changes-panel', key: 'context' } as const, null, {
   shape: 'context-1',
@@ -149,10 +149,7 @@ const loadListing = async (
   if (which === 'working') {
     const ran = await git($, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
     if (ran.exitCode !== 0) return { files: [], error: ran.stderr.trim(), summary: '' }
-    const [branch, tracked] = await Promise.all([
-      git($, ['branch', '--show-current']),
-      git($, ['diff', 'HEAD', '--numstat', '-z', '-M']),
-    ])
+    const tracked = await git($, ['diff', 'HEAD', '--numstat', '-z', '-M'])
     const found = parseStatus(ran.stdout)
     const counts = parseNumstat(
       tracked.exitCode === 0
@@ -164,7 +161,7 @@ const loadListing = async (
     return {
       files,
       error: null,
-      summary: `${branch.stdout.trim() || 'detached HEAD'} · ${files.length} uncommitted file${files.length === 1 ? '' : 's'}`,
+      summary: `${files.length} uncommitted file${files.length === 1 ? '' : 's'}`,
     }
   }
   if (which === 'graph') return { files: [], error: null, summary: '' }
@@ -221,6 +218,7 @@ const loadDiff = async ($: EngineInterface, which: Mode, commit: string, file: C
 }
 
 const refresh = async ($: EngineInterface) => {
+  void loadFooter($)
   const which = await read($, mode)
   const commit = await read($, rev)
   if (which === 'graph') {
@@ -251,14 +249,13 @@ const loadFooter = async ($: EngineInterface) => {
 }
 
 const loadFooterOrThrow = async ($: EngineInterface) => {
-  const [cwd, repo, model, branch] = await Promise.all([
+  const [cwd, repo, branch] = await Promise.all([
     $.session.cwd(),
     $.session.repo().catch(() => null),
-    $.session.model().catch(() => ''),
     git($, ['branch', '--show-current']).catch(() => null),
   ])
   const project = repo?.name ?? cwd.split('/').filter(Boolean).pop() ?? cwd
-  const next = { project, branch: branch?.stdout.trim() ?? '', model }
+  const next = { project, branch: branch?.stdout.trim() ?? '' }
   await update($, footer, () => next)
 }
 
@@ -372,6 +369,7 @@ export const register: Register = on => {
     const commit = await read($, rev)
     const open = await read($, shown)
     const lines = await read($, graph)
+    const env = await read($, footer)
 
     if (e.props.placement === 'widget') {
       return <Text>{list.files.length} changed</Text>
@@ -572,36 +570,43 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
-        <Box flexDirection="row" gap={1} flexWrap="wrap">
-          <Button
-            key="mode-working"
-            variant={which === 'working' ? 'primary' : 'secondary'}
-            onPress={switchTo('working')}
-          >
-            Uncommitted
-          </Button>
-          <Button
-            key="mode-commit"
-            variant={isLastCommit ? 'primary' : 'secondary'}
-            onPress={switchTo('commit')}
-          >
-            Last commit
-          </Button>
-          <Button
-            key="mode-graph"
-            variant={which === 'graph' ? 'primary' : 'secondary'}
-            onPress={switchTo('graph')}
-          >
-            Graph
-          </Button>
-          {which === 'commit' && !isLastCommit && (
-            <Button key="back-graph" onPress={switchTo('graph')}>
-              ← Back to graph
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
+            <Button
+              key="mode-working"
+              variant={which === 'working' ? 'primary' : 'secondary'}
+              onPress={switchTo('working')}
+            >
+              Uncommitted
             </Button>
+            <Button
+              key="mode-commit"
+              variant={isLastCommit ? 'primary' : 'secondary'}
+              onPress={switchTo('commit')}
+            >
+              Last commit
+            </Button>
+            <Button
+              key="mode-graph"
+              variant={which === 'graph' ? 'primary' : 'secondary'}
+              onPress={switchTo('graph')}
+            >
+              Graph
+            </Button>
+            {which === 'commit' && !isLastCommit && (
+              <Button key="back-graph" onPress={switchTo('graph')}>
+                ← Back to graph
+              </Button>
+            )}
+            <Button key="refresh" onPress={() => refresh($)}>
+              Refresh
+            </Button>
+          </Box>
+          {env.branch !== '' && (
+            <Text dimColor mono wrap="truncate-start">
+              ⎇ {env.branch}
+            </Text>
           )}
-          <Button key="refresh" onPress={() => refresh($)}>
-            Refresh
-          </Button>
         </Box>
         {which === 'graph' ? graphView : files}
       </Box>
@@ -645,8 +650,6 @@ export const register: Register = on => {
         <Box flexDirection="row" justifyContent="flex-end" gap={1} flexWrap="wrap">
           <Text dimColor wrap="truncate-end">
             {env.project}
-            {env.branch !== '' && ` · ⎇ ${env.branch}`}
-            {env.model !== '' && ` · ${env.model}`}
           </Text>
           <Button
             key="context-toggle"

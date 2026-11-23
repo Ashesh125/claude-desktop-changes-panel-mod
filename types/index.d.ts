@@ -20,7 +20,7 @@ export type GraphRow = {
   svg: string
   text: string
 }
-export type Footer = { project: string; branch: string; model: string }
+export type Footer = { project: string; branch: string }
 export type ContextInfo = {
   percent: number
   tokens: number
