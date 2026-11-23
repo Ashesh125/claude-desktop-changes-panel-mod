@@ -5,7 +5,7 @@ A Claude Code mod that adds a **Changes** pane beside the chat: a commit-style v
 - **Uncommitted** lists every changed, staged and untracked file with its status (M, A, D, R, U). Click a file to see its diff; click again to close it.
 - **Last commit** shows the files changed in `HEAD` and their diffs.
 - **Graph** draws the history of all branches as coloured lanes, with merge commits, branch and tag labels, author and age. Click a commit to see its files and diffs; **Load more commits** pages further back.
-- **Terminal** runs a one-shot command in the project folder (for example `git add -A` or `git commit -m "…"`) and shows its output. Interactive programs such as `vim` are not supported.
+- **Terminal** runs a one-shot command through `zsh -i` in the project folder, so your `~/.zshrc` aliases and functions work (for example `gst`, `git add -A` or `git commit -m "…"`), and shows its output. Interactive programs such as `vim` are not supported.
 
 The list refreshes by itself after Claude edits a file or runs a command, and after each command you run. Type `/changes` to reopen the pane.
 

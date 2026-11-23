@@ -69,7 +69,7 @@ test('the graph opens a commit, and the terminal runs a command', async ($, on) 
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('process.run', (_, e) => {
     const argv = e.argv
-    if (argv[0] === 'bash') {
+    if (argv[0] === 'zsh') {
       seen.push(argv[2] ?? '')
       return answer('hello\n')
     }
@@ -103,7 +103,7 @@ test('the graph opens a commit, and the terminal runs a command', async ($, on) 
   expect(await ui.find({ key: 'file:app/Foo.php' })).toBeDefined()
 
   await ui.input({ key: 'terminal', text: 'echo hello' })
-  expect(seen).toEqual(['echo hello 2>&1'])
+  expect(seen).toEqual(['{ echo hello\n} 2>&1'])
   expect((await ui.find({ type: 'Text', text: /\$ echo hello/ }))?.text).toBe('$ echo hello')
   await ui.unmount()
 })

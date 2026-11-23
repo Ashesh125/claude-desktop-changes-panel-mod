@@ -176,8 +176,13 @@ const runCommand = async ($: EngineInterface, command: string) => {
   let output: string
   let exitCode: number
   try {
-    const ran = await $.process.run(['bash', '-lc', `${command} 2>&1`], {
+    // An interactive zsh reads ~/.zshrc, so aliases and functions work; the
+    // braces send every command's errors, not just the last one's, to stdout.
+    const ran = await $.process.run(['zsh', '-ic', `{ ${command}\n} 2>&1`], {
       timeoutMs: 120000,
+      stdin: '',
+      // oh-my-zsh warns about "insecure directories" when started without a tty.
+      env: { ZSH_DISABLE_COMPFIX: 'true' },
     })
     output = cap(ran.stdout.replace(/\n$/, ''))
     exitCode = ran.exitCode
@@ -361,7 +366,7 @@ export const register: Register = on => {
           <Box flexGrow={1}>
             <Input
               key="terminal"
-              placeholder="Run a command in the project, e.g. git add -A"
+              placeholder="Run a zsh command in the project, e.g. gst or git add -A"
               value=""
               submitLabel="run"
               onSubmit={value => runCommand($, value)}
