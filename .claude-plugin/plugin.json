@@ -1,6 +1,6 @@
 {
   "name": "changes-panel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A Changes pane: changed files with diffs, a GitLab-style commit graph and a context footer.",
   "types": "./types/index.d.ts"
 }
