@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ChangedFile, ContextInfo, Listing, Mode } from '../types'
+import type { ChangedFile, ContextInfo, DiffView, Listing, Mode } from '../types'
+import { STEP, blocks, parseFullDiff } from './diff'
 import { layout, parseLog } from './graph'
 import { MINUTE, PROJECTS_PANE, PROJECTS_TITLE, formatMinutes, registerWorklog, startWorklog } from './worklog'
 import {
@@ -29,7 +30,7 @@ const listing = atom(
 const mode = atom({ plugin: 'changes-panel', key: 'mode' } as const, 'working', {
   shape: 'mode-2',
 })
-// The file last opened in the app's diff pane, marked in the tree.
+// The file last opened, marked in the tree.
 const picked = atom({ plugin: 'changes-panel', key: 'picked' } as const, null, {
   shape: 'picked-1',
 })
@@ -66,6 +67,10 @@ const collapsed = atom({ plugin: 'changes-panel', key: 'collapsed' } as const, [
 // starts over in the new one.
 const folder = atom({ plugin: 'changes-panel', key: 'folder' } as const, '', { shape: 'folder-1' })
 const FOLDER_CHECK = 3000
+// The file whose diff the pane shows in place of the list; null shows the list.
+const diff = atom({ plugin: 'changes-panel', key: 'diff' } as const, null, { shape: 'diff-1' })
+// A diff asked for with this much context holds the whole file.
+const WHOLE_FILE = '-U100000000'
 // Set by the Projects pane (hooks/worklog.tsx) when a board opens.
 const viewing = atom({ plugin: 'changes-panel', key: 'viewing' } as const, null, { shape: 'viewing-1' })
 
@@ -238,6 +243,7 @@ const followFolder = async ($: EngineInterface) => {
   if (isFirst) return false
   await update($, rev, () => 'HEAD')
   await update($, picked, () => null)
+  await update($, diff, () => null)
   await update($, collapsed, () => [])
   await update($, graphLimit, () => GRAPH_PAGE)
   await update($, mode, which => (which === 'commit' ? 'working' : which))
@@ -256,6 +262,11 @@ const refresh = async ($: EngineInterface) => {
   }
   const next = await loadListing($, which, commit)
   await update($, listing, () => next)
+  const open = await read($, diff)
+  if (open) {
+    const file = next.files.find(f => f.path === open.path)
+    if (file) await loadDiff($, which, commit, file, open.full)
+  }
 }
 
 // Never throws: the footer is a nicety, and must not break what called it.
@@ -295,32 +306,53 @@ const loadContext = async ($: EngineInterface) => {
 const compact = (n: number) =>
   n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 
-// Opens the app's own diff pane at this file: the uncommitted change, or
-// the change the commit made. The pane is the desktop app's, reached through
-// its view tool; a surface without it says so in a toast.
-const openInApp = async ($: EngineInterface, which: Mode, commit: string, file: ChangedFile) => {
+// The file's diff with the whole file as context: the uncommitted change
+// (an untracked file against nothing), or the change the commit made.
+const fileDiff = async ($: EngineInterface, which: Mode, commit: string, file: ChangedFile) => {
+  if (which === 'commit') return git($, ['show', WHOLE_FILE, '--format=', commit, '--', file.path])
+  if (file.isUntracked) return git($, ['diff', '--no-index', WHOLE_FILE, '--', '/dev/null', file.path])
+  return git($, ['diff', WHOLE_FILE, 'HEAD', '--', file.path])
+}
+
+// Shows one file's diff in the pane, in place of the list.
+const loadDiff = async ($: EngineInterface, which: Mode, commit: string, file: ChangedFile, full = false) => {
   await update($, picked, () => file.path)
+  await update($, diff, (was): DiffView => ({
+    path: file.path,
+    lines: was?.path === file.path ? was.lines : [],
+    isBinary: false,
+    isLoading: true,
+    error: null,
+    full,
+    revealed: [],
+  }))
+  let next: DiffView
   try {
-    const [top, sha] = await Promise.all([
-      git($, ['rev-parse', '--show-toplevel']),
-      which === 'commit' ? git($, ['rev-parse', commit]) : Promise.resolve(null),
-    ])
-    const root = top.stdout.trim()
-    const result = await $.mcp.call('ccd_view', 'show_pane', {
-      pane: 'diff',
-      path: root ? `${root}/${file.path}` : file.path,
-      diff_scope: sha ? sha.stdout.trim() : 'uncommitted',
-    })
-    if (result.isError) {
-      const words = result.content
-        .map(block => ('text' in block && typeof block.text === 'string' ? block.text : ''))
-        .join(' ')
-        .trim()
-      $.ui.toast(`Could not open the diff pane${words ? `: ${words}` : '.'}`)
+    const ran = await fileDiff($, which, commit, file)
+    // `git diff --no-index` exits 1 when the files differ.
+    const failed = ran.exitCode > 1 || (ran.exitCode === 1 && !file.isUntracked)
+    const parsed = parseFullDiff(ran.stdout)
+    next = {
+      path: file.path,
+      ...parsed,
+      isLoading: false,
+      error: failed ? ran.stderr.trim() || 'git could not show this file.' : null,
+      full,
+      revealed: [],
     }
   } catch (err) {
-    $.ui.toast(`Could not open the diff pane: ${err instanceof Error ? err.message : String(err)}`)
+    next = {
+      path: file.path,
+      lines: [],
+      isBinary: false,
+      isLoading: false,
+      error: err instanceof Error ? err.message : String(err),
+      full,
+      revealed: [],
+    }
   }
+  // The person may have moved on to another file meanwhile.
+  await update($, diff, was => (was?.path === file.path ? next : was))
 }
 
 const statusColor = (status: string) =>
@@ -339,7 +371,7 @@ export const register: Register = on => {
     const started = await next(e)
     await $.command.register({
       name: 'changes',
-      description: 'Open the Changes pane: changed files, diffs and the git graph',
+      description: 'Open the Changes pane: changed files, a diff per file and the git graph',
     })
     void $.ui.open({ id: PANE, title: TITLE })
     await followFolder($).catch(() => false)
@@ -378,7 +410,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const { Box, Text, Button } = ui
+    const { Box, Text, Button, Code } = ui
     const Svg = 'Svg' in ui ? ui.Svg : null
     const list = await read($, listing)
     const which = await read($, mode)
@@ -395,9 +427,10 @@ export const register: Register = on => {
       await update($, mode, () => to)
       await update($, rev, () => toRev)
       await update($, picked, () => null)
+      await update($, diff, () => null)
       await refresh($)
     }
-    const pick = (file: ChangedFile) => () => openInApp($, which, commit, file)
+    const pick = (file: ChangedFile) => () => loadDiff($, which, commit, file)
     const isLastCommit = which === 'commit' && commit === 'HEAD'
     // Showing a project's folder rather than the session's: a way back.
     const sessionRoot = await $.session.root().catch(() => '')
@@ -533,7 +566,112 @@ export const register: Register = on => {
       </Box>
     )
 
-    const files = fileList
+    // One file's diff in place of the list: the changes with their context,
+    // folded stretches between them opened on a press, or the whole file.
+    const shownDiff = await read($, diff)
+    // ‹ › step through the files in the order the tree draws them.
+    const ordered = buildTree(list.files, [])
+      .map(row => row.file)
+      .filter((f): f is ChangedFile => f !== undefined)
+    const fileAt = ordered.findIndex(f => f.path === shownDiff?.path)
+    const stepFile = (by: number) => async () => {
+      if (ordered.length === 0) return
+      const to = ordered[(Math.max(0, fileAt) + by + ordered.length) % ordered.length]
+      if (to) await loadDiff($, which, commit, to)
+    }
+    const setFull = (full: boolean) => () =>
+      update($, diff, was => (was ? { ...was, full, revealed: [] } : was))
+    const reveal = (from: number, to: number) => () =>
+      update($, diff, was => (was ? { ...was, revealed: [...was.revealed, [from, to] as [number, number]] } : was))
+    const closeDiff = async () => {
+      await update($, diff, () => null)
+    }
+
+    const diffBody = (view: NonNullable<DiffView>) => {
+      if (view.error !== null) return <Text color="error">{view.error}</Text>
+      if (view.isBinary) return <Text dimColor>Binary file: no text to compare.</Text>
+      if (view.isLoading && view.lines.length === 0) return <Text dimColor>Loading the diff…</Text>
+      if (view.lines.length === 0) return <Text dimColor>No changes to show in this file.</Text>
+      if (!view.full && view.lines.every(l => l.kind === 'ctx')) {
+        return <Text dimColor>No line changes (only the file mode or name changed).</Text>
+      }
+      return (
+        <Box flexDirection="column">
+          {blocks(view.lines, view.full, view.revealed).map(block => {
+            if (block.kind === 'hunk') {
+              return <Code key={`hunk:${block.from}`} source={block.source} format="diff" path={view.path} />
+            }
+            const hidden = block.to - block.from
+            return (
+              <Box key={`gap:${block.from}`} flexDirection="row" gap={1} flexWrap="wrap" paddingX={1}>
+                {hidden > STEP ? (
+                  <>
+                    <Button key={`gap:${block.from}:down`} plain dimColor onPress={reveal(block.from, block.from + STEP)}>
+                      {`↓ ${STEP} more`}
+                    </Button>
+                    <Button key={`gap:${block.from}:all`} plain dimColor onPress={reveal(block.from, block.to)}>
+                      {`⋯ Show all ${hidden} hidden lines`}
+                    </Button>
+                    <Button key={`gap:${block.from}:up`} plain dimColor onPress={reveal(block.to - STEP, block.to)}>
+                      {`↑ ${STEP} more`}
+                    </Button>
+                  </>
+                ) : (
+                  <Button key={`gap:${block.from}:all`} plain dimColor onPress={reveal(block.from, block.to)}>
+                    {`⋯ Show ${hidden} hidden line${hidden === 1 ? '' : 's'}`}
+                  </Button>
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )
+    }
+
+    const diffView = shownDiff && (() => {
+      const file = ordered[fileAt]
+      const slash = shownDiff.path.lastIndexOf('/')
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1} flexWrap="wrap">
+            <Box flexDirection="row" gap={1} alignItems="center">
+              <Button key="diff-back" onPress={closeDiff}>
+                ← Files
+              </Button>
+              <Button key="diff-prev" onPress={stepFile(-1)}>
+                ‹
+              </Button>
+              <Text dimColor tabular>
+                {fileAt >= 0 ? `${fileAt + 1} / ${ordered.length}` : ''}
+              </Text>
+              <Button key="diff-next" onPress={stepFile(1)}>
+                ›
+              </Button>
+            </Box>
+            <Box flexDirection="row" gap={1}>
+              <Button key="diff-changes" variant={shownDiff.full ? 'secondary' : 'primary'} onPress={setFull(false)}>
+                Changes
+              </Button>
+              <Button key="diff-full" variant={shownDiff.full ? 'primary' : 'secondary'} onPress={setFull(true)}>
+                Whole file
+              </Button>
+            </Box>
+          </Box>
+          <Box flexDirection="column" gap={1} borderStyle="round" borderDimColor paddingX={1} paddingY={1}>
+            <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
+              <Text wrap="truncate-start" mono>
+                <Text dimColor>{shownDiff.path.slice(0, slash + 1)}</Text>
+                <Text bold>{shownDiff.path.slice(slash + 1)}</Text>
+              </Text>
+              {file && !file.isBinary && counts(file.added, file.removed)}
+            </Box>
+            {diffBody(shownDiff)}
+          </Box>
+        </Box>
+      )
+    })()
+
+    const files = diffView || fileList
 
     const limit = await read($, graphLimit)
     const refColor = (ref: string) =>

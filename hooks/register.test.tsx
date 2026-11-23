@@ -40,11 +40,27 @@ const DIFF = [
   '',
 ].join('\n')
 
+// app/Foo.php with the whole file as context: 40 lines, line 31 changed.
+const FULL_DIFF = [
+  'diff --git a/app/Foo.php b/app/Foo.php',
+  'index 111..222 100644',
+  '--- a/app/Foo.php',
+  '+++ b/app/Foo.php',
+  '@@ -1,40 +1,40 @@',
+  ...Array.from({ length: 30 }, (_, i) => ` line ${i + 1}`),
+  '-old line',
+  '+new line',
+  ...Array.from({ length: 9 }, (_, i) => ` line ${i + 32}`),
+  '',
+].join('\n')
+
+const NEW_FILE = ['diff --git a/new.txt b/new.txt', 'new file mode 100644', '--- /dev/null', '+++ b/new.txt', '@@ -0,0 +1 @@', '+hello', ''].join('\n')
+
 const answer = (stdout: string, exitCode = 0) => ({
   value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
 })
 
-test('lists changed files and opens one in the app diff pane', async ($, on) => {
+test('lists changed files and shows one file\'s diff in the pane', async ($, on) => {
   const opened: unknown[] = []
   on('mcp.call', (_, e) => {
     opened.push(e)
@@ -63,6 +79,9 @@ test('lists changed files and opens one in the app diff pane', async ($, on) => 
     if (args.startsWith('branch')) return answer('main\n')
     if (args.startsWith('diff HEAD --numstat')) return answer('2\t1\tapp/Foo.php\0')
     if (args.startsWith('diff HEAD')) return answer(DIFF)
+    if (args === 'diff -U100000000 HEAD -- app/Foo.php') return answer(FULL_DIFF)
+    if (args === 'diff --no-index -U100000000 -- /dev/null new.txt') return answer(NEW_FILE, 1)
+    if (args.startsWith('diff --no-index --numstat')) return answer('1\t0\tnew.txt\n', 1)
     return answer('', 1)
   })
 
@@ -74,13 +93,31 @@ test('lists changed files and opens one in the app diff pane', async ($, on) => 
     expect((await ui.find({ type: 'Text', text: /^Working tree$/ }))?.text).toBe('Working tree')
     // The branch sits beside the view buttons.
     expect((await ui.find({ type: 'Text', text: /⎇/ }))?.text).toBe('my-app ⎇ main')
-    // A click opens the app's own diff pane at that file's uncommitted change.
+    // A click shows that file's diff in the pane, not the app's diff pane.
     await ui.press({ key: 'file:app/Foo.php' })
-    expect(opened.at(-1)).toEqual({
-      server: 'ccd_view',
-      tool: 'show_pane',
-      args: { pane: 'diff', path: '/repo/app/Foo.php', diff_scope: 'uncommitted' },
-    })
+    expect(opened).toEqual([])
+    expect((await ui.find({ type: 'Code' }))?.text).toBe(
+      ['@@ -28,7 +28,7 @@', ' line 28', ' line 29', ' line 30', '-old line', '+new line', ' line 32', ' line 33', ' line 34'].join('\n'),
+    )
+    expect((await ui.find({ type: 'Text', text: /^1 \/ 2$/ }))?.text).toBe('1 / 2')
+    // Unchanged lines fold away; a press opens them a stretch at a time, or all.
+    expect((await ui.find({ key: 'gap:0:all' }))?.text).toBe('⋯ Show all 27 hidden lines')
+    expect((await ui.find({ key: 'gap:35:all' }))?.text).toBe('⋯ Show 6 hidden lines')
+    await ui.press({ key: 'gap:0:down' })
+    expect((await ui.find({ key: 'gap:20:all' }))?.text).toBe('⋯ Show 7 hidden lines')
+    await ui.press({ key: 'gap:20:all' })
+    expect(await ui.find({ key: 'gap:20:all' })).toBeUndefined()
+    // The whole file, then back to the changes only.
+    await ui.press({ key: 'diff-full' })
+    expect(await ui.findAll({ type: 'Code' })).toHaveLength(1)
+    expect(await ui.find({ key: 'gap:35:all' })).toBeUndefined()
+    await ui.press({ key: 'diff-changes' })
+    expect((await ui.find({ key: 'gap:0:all' }))?.text).toBe('⋯ Show all 27 hidden lines')
+    // The next file: an untracked one, all added.
+    await ui.press({ key: 'diff-next' })
+    expect((await ui.find({ type: 'Code' }))?.text).toBe('@@ -0,0 +1,1 @@\n+hello')
+    expect((await ui.find({ type: 'Text', text: /^2 \/ 2$/ }))?.text).toBe('2 / 2')
+    await ui.press({ key: 'diff-back' })
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
     // Files sit in a tree under their folder, with their line counts.
     expect((await ui.find({ key: 'dir:app' }))?.text).toBe('app')
@@ -120,6 +157,7 @@ test('the graph opens a commit', async ($, on) => {
       )
     }
     if (args.startsWith('show --name-status')) return answer('M\0app/Foo.php\0')
+    if (args === `show -U100000000 --format= ${'c'.repeat(40)} -- app/Foo.php`) return answer(DIFF)
     if (args.startsWith('log -1')) return answer('def5678\x1fAdd feature\x1fAsh\x1f1 day ago\n')
     if (args.startsWith('status')) return answer('')
     if (args.startsWith('branch')) return answer('main\n')
@@ -136,12 +174,10 @@ test('the graph opens a commit', async ($, on) => {
   await ui.press({ key: `commit:${'c'.repeat(40)}` })
   expect((await ui.find({ type: 'Text', text: /Add feature/ }))?.text).toBe('def5678 Add feature')
   expect(await ui.find({ key: 'file:app/Foo.php' })).toBeDefined()
+  // The file's diff is the change that commit made.
   await ui.press({ key: 'file:app/Foo.php' })
-  expect(opened.at(-1)).toEqual({
-    server: 'ccd_view',
-    tool: 'show_pane',
-    args: { pane: 'diff', path: '/repo/app/Foo.php', diff_scope: 'c'.repeat(40) },
-  })
+  expect(opened).toEqual([])
+  expect((await ui.find({ type: 'Code' }))?.text).toBe('@@ -1,2 +1,2 @@\n <?php\n-old line\n+new line')
 
   await ui.unmount()
 })

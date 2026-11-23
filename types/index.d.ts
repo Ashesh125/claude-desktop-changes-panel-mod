@@ -33,6 +33,21 @@ export type ContextInfo = {
   categories: { name: string; tokens: number; color: string }[]
 } | null
 
+// One line of a file's diff, numbered on each side it exists on.
+export type DiffLine = { kind: 'add' | 'del' | 'ctx'; old: number | null; new: number | null; text: string }
+// The one file the Changes pane shows a diff of, in place of the file list.
+export type DiffView = {
+  path: string
+  lines: DiffLine[]
+  isBinary: boolean
+  isLoading: boolean
+  error: string | null
+  // The whole file, or only the changes with their context.
+  full: boolean
+  // Folded ranges the person opened, [from, to) by line index.
+  revealed: [number, number][]
+} | null
+
 // ---- Projects pane: OpenProject work, timers and time --------------------------
 
 export type Lane = 'todo' | 'doing' | 'review' | 'done'
@@ -106,6 +121,7 @@ declare module 'claude-code' {
       collapsed: Shaped<string[]>
       folder: Shaped<string>
       viewing: Shaped<string | null>
+      diff: Shaped<DiffView>
       worklog: Shaped<Worklog>
       opData: Shaped<OpData>
       page: Shaped<Page>
