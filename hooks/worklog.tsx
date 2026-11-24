@@ -1,4 +1,4 @@
-// The Projects pane: your OpenProject projects, each one's work on a board,
+// The OpenProject pane: your OpenProject projects, each one's work on a board,
 // moved and timed from here. The URL and API key live on this machine only,
 // in ~/.config/changes-panel/openproject.json: {"url": "https://…", "apiKey": "…"}.
 
@@ -8,7 +8,7 @@ import type { EngineInterface, On } from 'claude-code'
 import type { Activity, Lane, LocalTask, OpData, OpStatus, OpStatusDef, Page, WorkItem, Worklog } from '../types'
 
 export const PROJECTS_PANE = 'changes-panel-projects'
-export const PROJECTS_TITLE = 'Projects'
+export const PROJECTS_TITLE = 'OpenProject'
 export const MINUTE = 60_000
 const STORE_KEY = 'worklog-2'
 const CACHE_KEY = 'op-cache'
@@ -60,7 +60,7 @@ export const laneOf = (status: string, isClosed: boolean): Lane => {
 
 // ---- Small helpers -------------------------------------------------------------
 
-const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
+export const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 export const formatMinutes = (minutes: number) => {
   const m = Math.max(0, Math.round(minutes))
@@ -90,12 +90,12 @@ export const isoMinutes = (iso: string | null) => {
 }
 export const isoDuration = (minutes: number) => `PT${Math.floor(minutes / 60)}H${minutes % 60}M`
 
-const startOfDay = (now: number) => {
+export const startOfDay = (now: number) => {
   const d = new Date(now)
   d.setHours(0, 0, 0, 0)
   return d.getTime()
 }
-const startOfWeek = (now: number) => {
+export const startOfWeek = (now: number) => {
   const d = new Date(startOfDay(now))
   d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
   return d.getTime()
@@ -104,7 +104,7 @@ const localDate = (ms: number) => {
   const d = new Date(ms)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-const clockTime = (ms: number) => new Date(ms).toTimeString().slice(0, 5)
+export const clockTime = (ms: number) => new Date(ms).toTimeString().slice(0, 5)
 
 const squash = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, '')
 
@@ -383,13 +383,19 @@ async function bookTime($: EngineInterface, item: WorkItem, minutes: number, act
 
 // ---- Claude Code sessions -----------------------------------------------------
 
-async function startSession($: EngineInterface, folder: string, title: string, task: string | null) {
+export async function startSession(
+  $: EngineInterface,
+  folder: string,
+  title: string,
+  task: string | null,
+  source = 'OpenProject',
+) {
   const prompt = task
-    ? `${task}\n\nThis is tracked on the board in the Projects pane, and its timer is running.`
-    : 'I opened this project from the Projects pane. Say hello in one line, then wait for my instructions.'
+    ? `${task}\n\nThis is tracked on the board in the ${source} pane, and its timer is running.`
+    : `I opened this project from the ${source} pane. Say hello in one line, then wait for my instructions.`
   const background =
-    `The user started this session from the Projects pane of their changes-panel mod, which shows their ` +
-    `OpenProject work. Project folder: ${folder}.` +
+    `The user started this session from the ${source} pane of their changes-panel mod, which shows their ` +
+    `${source} work. Project folder: ${folder}.` +
     (task ? ' Work on the task in the prompt; ask before anything large or destructive.' : ' There is no task yet.')
   try {
     const ran = await $.mcp.call('ccd_session', 'start_session', {
@@ -454,10 +460,16 @@ async function stopTimer($: EngineInterface, key: string) {
 // last logged time on this card (or since today began), as the git-hours method
 // does: gaps of up to two hours count as work, plus half an hour before each run.
 async function estimateFromGit($: EngineInterface, key: string, folder: string | null) {
-  if (!folder) return { minutes: null, reason: 'Link this project to a folder to get an estimate from your commits.' }
-  const now = await $.clock.now()
   const log = await read($, worklog)
   const last = log.entries.filter(e => e.key === key).reduce((max, e) => Math.max(max, e.at), 0)
+  return commitEstimate($, folder, last)
+}
+
+// The git-hours estimate of your commits in a folder since `last` (or since
+// today began, whichever is later). Shared with the GitLab pane.
+export async function commitEstimate($: EngineInterface, folder: string | null, last: number) {
+  if (!folder) return { minutes: null, reason: 'Link this project to a folder to get an estimate from your commits.' }
+  const now = await $.clock.now()
   const since = Math.max(last, startOfDay(now))
   const email = await $.process.run(['git', '-C', folder, 'config', 'user.email'])
   const args = ['git', '-C', folder, 'log', '--all', `--since=@${Math.floor(since / 1000)}`, '--format=%ct']
@@ -533,11 +545,11 @@ async function addLocalTask($: EngineInterface, projectId: string, title: string
 // ---- Session start (called from the module's one session.start hook) --------------
 
 export async function startWorklog($: EngineInterface) {
-  await $.command.register({ name: 'projects', description: 'Open the Projects pane: your OpenProject boards and time' })
+  await $.command.register({ name: 'open-project', description: 'Open the OpenProject pane: your OpenProject boards and time' })
   await $.tool.register({
     name: 'create_task',
     description:
-      "Adds a task of the user's own to one of their projects on the Projects pane's board (kept in the pane, " +
+      "Adds a task of the user's own to one of their projects on the OpenProject pane's board (kept in the pane, " +
       'not sent to OpenProject). Use it when the user asks you to add or note down a task. `project` is the ' +
       'OpenProject project title (e.g. "IATI Publisher Support").',
     inputSchema: {
@@ -582,7 +594,7 @@ const initials = (name: string) =>
 
 const hue = (name: string) => [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
 
-const avatarSvg = (name: string | null) => {
+export const avatarSvg = (name: string | null) => {
   const text = name ? initials(name) : '–'
   const fill = name ? `hsl(${hue(name)} 45% 45%)` : '#8b949e'
   return (
@@ -592,7 +604,7 @@ const avatarSvg = (name: string | null) => {
   )
 }
 
-const laneDotSvg = (color: string) =>
+export const laneDotSvg = (color: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="${color}"/></svg>`
 
 // How a project's work splits across the four columns.
@@ -618,10 +630,10 @@ const laneStripSvg = (counts: number[], width = 220) => {
 // ---- Hooks ---------------------------------------------------------------------------
 
 export const registerWorklog = (on: On) => {
-  on('command.run', { command: 'projects' }, async $ => {
+  on('command.run', { command: 'open-project' }, async $ => {
     await $.ui.open({ id: PROJECTS_PANE, title: PROJECTS_TITLE })
     void syncOpenProject($).catch(() => undefined)
-    return { text: 'Projects pane opened.' }
+    return { text: 'OpenProject pane opened.' }
   })
 
   on('tool.run', { tool: 'mcp__changes-panel__create_task' }, async ($, e) => {
@@ -719,7 +731,7 @@ export const registerWorklog = (on: On) => {
               </Button>
             )}
             <Text bold size="heading" wrap="truncate-end">
-              {project ? project.title : 'Projects'}
+              {project ? project.title : 'OpenProject'}
             </Text>
           </Box>
           <Text dimColor tabular>

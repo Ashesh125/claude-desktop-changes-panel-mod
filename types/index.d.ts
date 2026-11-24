@@ -106,6 +106,66 @@ export type LogForm = {
 export type OpStatus = { state: 'off' | 'ok' | 'error' | 'syncing'; message: string; syncedAt: number | null }
 export type Running = { label: string; startedAt: number } | null
 
+// ---- GitLab pane
+export type GlPipeline = { status: string; ref: string; url: string; updatedAt: string }
+export type GlProject = {
+  id: string
+  path: string
+  name: string
+  url: string
+  defaultBranch: string
+  lastActivity: string
+  pipeline: GlPipeline | null
+}
+// A board column: an issue-board list's label, or Open / Closed (label null).
+export type GlColumn = { id: string; title: string; label: string | null; color: string }
+export type GlIssue = {
+  projectId: string
+  iid: number
+  title: string
+  labels: string[]
+  isClosed: boolean
+  assignees: string[]
+  isMine: boolean
+  spentSeconds: number
+  url: string
+}
+export type GlMr = {
+  projectId: string
+  iid: number
+  title: string
+  branch: string
+  isDraft: boolean
+  mergeStatus: string
+  author: string
+  isMine: boolean
+  needsMyReview: boolean
+  url: string
+}
+export type GlData = {
+  host: string | null
+  me: { id: number; username: string; name: string } | null
+  projects: GlProject[]
+  // Your open issues, MRs and review requests across GitLab.
+  assigned: GlIssue[]
+  mrs: GlMr[]
+  // Per project, loaded when its board opens.
+  columns: Record<string, GlColumn[]>
+  issues: Record<string, GlIssue[]>
+  projectMrs: Record<string, GlMr[]>
+  pipelines: Record<string, GlPipeline[]>
+}
+export type GlSaved = {
+  // GitLab project id → local folder.
+  links: Record<string, string | null>
+  // Projects you added by search, shown even without work assigned.
+  pinned: string[]
+  timers: Record<string, number>
+  entries: Entry[]
+}
+export type GlPage = { name: 'projects' } | { name: 'board'; projectId: string }
+export type GlStatus = { state: 'off' | 'syncing' | 'ok' | 'error'; message: string; syncedAt: number | null }
+
 declare module 'claude-code' {
   interface PluginState {
     'changes-panel': {
@@ -132,6 +192,16 @@ declare module 'claude-code' {
       minute: Shaped<number>
       opStatus: Shaped<OpStatus>
       running: Shaped<Running>
+      glData: Shaped<GlData>
+      glSaved: Shaped<GlSaved>
+      glPage: Shaped<GlPage>
+      glForm: Shaped<LogForm>
+      glExpanded: Shaped<string | null>
+      glMine: Shaped<boolean>
+      glStatus: Shaped<GlStatus>
+      glRunning: Shaped<Running>
+      glFound: Shaped<GlProject[]>
+      glRemotes: Shaped<Record<string, string>>
     }
   }
 }

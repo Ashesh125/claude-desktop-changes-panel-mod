@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ChangedFile, ContextInfo, DiffView, Listing, Mode } from '../types'
 import { STEP, blocks, parseFullDiff } from './diff'
 import { layout, parseLog } from './graph'
+import { GITLAB_PANE, GITLAB_TITLE, registerGitlab, startGitlab } from './gitlab'
 import { MINUTE, PROJECTS_PANE, PROJECTS_TITLE, formatMinutes, registerWorklog, startWorklog } from './worklog'
 import {
   STATUS_WORDS,
@@ -59,6 +60,7 @@ const contextOpen = atom({ plugin: 'changes-panel', key: 'contextOpen' } as cons
 // for the band: same plugin and key, so the same values.
 const running = atom({ plugin: 'changes-panel', key: 'running' } as const, null, { shape: 'running-1' })
 const minute = atom({ plugin: 'changes-panel', key: 'minute' } as const, 0, { shape: 'minute-1' })
+const glRunning = atom({ plugin: 'changes-panel', key: 'glRunning' } as const, null, { shape: 'gl-running-1' })
 // Folders the person folded in the tree, by path.
 const collapsed = atom({ plugin: 'changes-panel', key: 'collapsed' } as const, [], {
   shape: 'collapsed-1',
@@ -366,6 +368,7 @@ const statusColor = (status: string) =>
 
 export const register: Register = on => {
   registerWorklog(on)
+  registerGitlab(on)
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -379,6 +382,7 @@ export const register: Register = on => {
     $.clock.every(FOLDER_CHECK, () => followFolder($).catch(() => false))
     void loadFooter($)
     await startWorklog($).catch(() => undefined)
+    await startGitlab($).catch(() => undefined)
     void loadContext($).catch(() => undefined)
 
     return started
@@ -784,7 +788,7 @@ export const register: Register = on => {
     const env = await read($, footer)
     const ctx = await read($, context)
     const isContextOpen = await read($, contextOpen)
-    const timer = await read($, running)
+    const timer = (await read($, running)) ?? (await read($, glRunning))
     await read($, minute)
     const runningFor = timer ? formatMinutes(((await $.clock.now()) - timer.startedAt) / MINUTE) : ''
 
@@ -825,7 +829,10 @@ export const register: Register = on => {
             dimColor
             onPress={() => $.ui.open({ id: PROJECTS_PANE, title: PROJECTS_TITLE })}
           >
-            Projects
+            OpenProject
+          </Button>
+          <Button key="gitlab-open" plain dimColor onPress={() => $.ui.open({ id: GITLAB_PANE, title: GITLAB_TITLE })}>
+            GitLab
           </Button>
           <Text dimColor wrap="truncate-end">
             {env.project}
